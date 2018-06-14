@@ -41,21 +41,26 @@ typedef void (^AuthCompletion)(NSError *error);
 
 
 // Nastyhack so we can get a callback when doing a token refresh (async)
-@interface NXOAuth2AuthenticatorRefreshCallback : NXOAuth2Connection
-@property (nonatomic, copy) void (^completionHandler)();
+@interface NXOAuth2AuthenticatorRefreshCallback : NXOAuth2Connection<NXOAuth2ConnectionDelegate>
+@property (nonatomic, copy) void (^completionHandler)(NSError *);
 @end
 @implementation NXOAuth2AuthenticatorRefreshCallback
 
-- (id)initWithCompletionHandler:(void (^)())completionHandler {
+- (id)initWithCompletionHandler:(void (^)(NSError *))completionHandler {
     if (self = [super init]) {
         _completionHandler = completionHandler;
+        self.delegate = self;
     }
     return self;
 }
 
 // Invoked by NXOAuth2Client when access token is refreshed.
 - (void)retry {
-    self.completionHandler();
+    self.completionHandler(nil);
+}
+
+- (void)oauthConnection:(NXOAuth2Connection *)connection didFailWithError:(NSError *)error {
+    self.completionHandler(error);
 }
 
 @end
@@ -246,7 +251,13 @@ typedef void (^AuthCompletion)(NSError *error);
     if (self.userAccount.accessToken.refreshToken
         && [tenSecondsAgo earlierDate:tokenExpiresAt] == tokenExpiresAt)
     {
-        [self.userAccount.oauthClient refreshAccessTokenAndRetryConnection:[[NXOAuth2AuthenticatorRefreshCallback alloc] initWithCompletionHandler:^() {
+        self.userAccount.oauthClient.delegate = self.userAccount;
+        
+        [self.userAccount.oauthClient refreshAccessTokenAndRetryConnection:[[NXOAuth2AuthenticatorRefreshCallback alloc] initWithCompletionHandler:^(NSError *error) {
+            if (error != nil) {
+                completionHandler(nil, error);
+                return;
+            }
             NSString *oauthAuthorizationHeader = [NSString stringWithFormat:@"%@ %@", self.userAccount.accessToken.tokenType, self.userAccount.accessToken.accessToken];
             [request setValue:oauthAuthorizationHeader forHTTPHeaderField:MS_API_HEADER_AUTHORIZATION];
             completionHandler(request, nil);
@@ -266,26 +277,34 @@ typedef void (^AuthCompletion)(NSError *error);
                  presentingViewController:(UIViewController *)presentingViewController
                                completion:(AuthCompletion)completionHandler
 {
-    // Always remove the auth view when we finished loading.
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [presentingViewController dismissViewControllerAnimated:NO completion:nil];
-    });
+    AuthCompletion completionWithVCDismiss = ^(NSError *error) {
+
+        if (completionHandler != nil) {
+            completionHandler(error);
+        }
+
+        // Always remove the auth view when we finished loading, but also after completionHandler
+        // has been called, to avoid viewWillAppear making another unauthenticated result
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [presentingViewController dismissViewControllerAnimated:NO completion:nil];
+        });
+    };
     
     if (!error)
     {
         if ([[NXOAuth2AccountStore sharedStore] handleRedirectURL:endURL]) {
-            self.pendingAuthCompletion = completionHandler;
+            self.pendingAuthCompletion = completionWithVCDismiss;
             // Completion delayed until we get one of the following:
             //   NXOAuth2AccountStoreAccountsDidChangeNotification
             //   NXOAuth2AccountStoreDidFailToRequestAccessNotification
         } else {
-            completionHandler([NSError errorWithDomain:MS_AUTH_ERROR_DOMAIN
+            completionWithVCDismiss([NSError errorWithDomain:MS_AUTH_ERROR_DOMAIN
                                                   code:MSAuthErrorTypeInvalidAccountType
                                               userInfo:@{}]);
         }
     }
     else{
-        completionHandler(error);
+        completionWithVCDismiss(error);
     }
 }
 
