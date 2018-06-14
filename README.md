@@ -1,3 +1,10 @@
+# iFM FORK DESCRIPTION
+Forked for project coty-visit. 
+Contains fix for refreshing access token while application is suspended.
+Problem description in task: https://infullmobile.atlassian.net/browse/LCSD-29
+
+
+
 # Microsoft Graph iOs SDK Authentication Quick-Start Kit
 
 ## Overview
